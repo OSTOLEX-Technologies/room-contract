@@ -1,4 +1,4 @@
-use crate::KeyStore::Rooms;
+use crate::KeyStore::{BannedPlayers, Players, Rooms};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::env::predecessor_account_id;
 use near_sdk::serde::Serialize;
@@ -18,6 +18,7 @@ pub struct Room {
     player_limit: u32,
     is_hidden: bool,
     is_closed: bool,
+    extra: Option<String>,
 }
 
 #[near_bindgen]
@@ -26,12 +27,14 @@ pub struct Room {
 pub struct RoomConfig {
     is_hidden: bool,
     player_limit: u32,
+    extra: Option<String>,
 }
 
 #[derive(BorshStorageKey, BorshSerialize)]
 pub enum KeyStore {
     Rooms,
-    BannedPlayers { account_room_hash: CryptoHash },
+    Players { hash: CryptoHash },
+    BannedPlayers { hash: CryptoHash },
 }
 
 #[near_bindgen]
@@ -57,27 +60,25 @@ impl Contract {
 
         let next_room_id = self.next_room_id;
         let room_id_hash = next_room_id.to_le_bytes();
-        let room_prefix: Vec<u8> = [
-            b"s".as_slice(),
-            &near_sdk::env::sha256_array(
-                [&account_id.as_bytes()[..], &room_id_hash[..]]
-                    .concat()
-                    .as_slice(),
-            ),
-        ]
-        .concat();
 
-        let players_prefix: Vec<u8> =
-            [b"s".as_slice(), &near_sdk::env::sha256_array(&room_id_hash)].concat();
+        let hash = near_sdk::env::sha256_array(
+            [&account_id.as_bytes()[..], &room_id_hash[..]]
+                .concat()
+                .as_slice());
 
         let new_room = Room {
             room_id: next_room_id,
             owner_id: account_id,
-            players: Vector::new(players_prefix),
-            banned_players: Vector::new(room_prefix),
+            players: Vector::new(Players {
+                hash: hash.clone()
+            }),
+            banned_players: Vector::new(BannedPlayers {
+                hash: hash.clone()
+            }),
             player_limit: room_config.player_limit,
             is_hidden: room_config.is_hidden,
             is_closed: false,
+            extra: room_config.extra,
         };
 
         self.rooms.insert(new_room.room_id, new_room);
