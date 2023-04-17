@@ -486,14 +486,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
-name = "hello_near"
-version = "1.0.0"
-dependencies = [
- "near-sdk",
- "uint",
-]
-
-[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1053,6 +1045,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd124222d17ad93a644ed9d011a40f4fb64aa54275c08cc216524a9ea82fb09f"
 dependencies = [
  "digest 0.10.6",
+]
+
+[[package]]
+name = "room"
+version = "1.0.0"
+dependencies = [
+ "near-sdk",
+ "uint",
 ]
 
 [[package]]
