@@ -1,5 +1,6 @@
 use crate::KeyStore::{BannedPlayers, Players, Rooms, RoomsPerApp, RoomsPerOwner};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::collections::UnorderedMap;
 use near_sdk::env::predecessor_account_id;
 use near_sdk::serde::Serialize;
 use near_sdk::store::LookupMap;
@@ -37,8 +38,8 @@ pub struct RoomConfig {
 #[derive(BorshStorageKey, BorshSerialize)]
 pub enum KeyStore {
     Rooms,
-    RoomsPerOwner,
     RoomsPerApp,
+    RoomsPerOwner { hash: CryptoHash },
     Players { hash: CryptoHash },
     BannedPlayers { hash: CryptoHash },
 }
@@ -47,7 +48,7 @@ pub enum KeyStore {
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     rooms: LookupMap<RoomId, Room>,
-    rooms_per_app_owner: LookupMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
+    rooms_per_app_owner: UnorderedMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
     next_room_id: u64,
 }
 
@@ -55,7 +56,7 @@ impl Default for Contract {
     fn default() -> Self {
         Self {
             rooms: LookupMap::new(Rooms),
-            rooms_per_app_owner: LookupMap::new(RoomsPerApp),
+            rooms_per_app_owner: UnorderedMap::new(RoomsPerApp),
             next_room_id: 0,
         }
     }
@@ -72,18 +73,15 @@ impl Contract {
         let hash = near_sdk::env::sha256_array(
             [&account_id.as_bytes()[..], &room_id_hash[..]]
                 .concat()
-                .as_slice());
+                .as_slice(),
+        );
 
         let new_room = Room {
             room_id,
             name: room_config.name,
-            owner_id: account_id,
-            players: Vector::new(Players {
-                hash: hash.clone()
-            }),
-            banned_players: Vector::new(BannedPlayers {
-                hash: hash.clone()
-            }),
+            owner_id: account_id.clone(),
+            players: Vector::new(Players { hash: hash.clone() }),
+            banned_players: Vector::new(BannedPlayers { hash: hash.clone() }),
             player_limit: room_config.player_limit,
             is_hidden: room_config.is_hidden,
             is_closed: false,
@@ -91,6 +89,23 @@ impl Contract {
         };
 
         self.rooms.insert(new_room.room_id, new_room);
+
+        let mut rooms_per_owner = self
+            .rooms_per_app_owner
+            .get(&room_config.app_name)
+            .unwrap_or_else(|| LookupMap::new(RoomsPerOwner { hash }));
+
+        let mut rooms = match rooms_per_owner.get(&account_id) {
+            None => Vec::new(),
+            Some(rooms) => rooms.clone(),
+        };
+
+        rooms.push(room_id);
+        rooms_per_owner.insert(account_id.clone(), rooms.clone());
+
+        self.rooms_per_app_owner
+            .insert(&room_config.app_name, &rooms_per_owner);
+
         self.next_room_id += 1;
 
         room_id
@@ -157,16 +172,22 @@ impl Contract {
             panic!("Only the owner can close the room")
         }
 
-        let rooms_per_owner = self.rooms_per_app_owner
-            .get_mut(&app_name)
+        let mut rooms_per_owner = self
+            .rooms_per_app_owner
+            .get(&app_name)
             .expect("App name not found");
 
-        let player_rooms = rooms_per_owner.get_mut(&player_id).expect("Player rooms not found");
+        let mut player_rooms = rooms_per_owner
+            .get(&player_id)
+            .expect("Player rooms not found")
+            .clone();
 
         let mut room_idx = 0;
         for room_id_to_remove in player_rooms.iter() {
             if room_id_to_remove.eq(&room_id) {
                 player_rooms.swap_remove(room_idx);
+                rooms_per_owner.insert(player_id, player_rooms);
+                self.rooms_per_app_owner.insert(&app_name, &rooms_per_owner);
                 self.rooms.remove(&room_id);
                 return;
             }
