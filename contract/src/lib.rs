@@ -1,24 +1,24 @@
-use crate::KeyStore::{BannedPlayers, Players, Rooms, RoomsPerApp, RoomsPerOwner};
+use crate::KeyStore::{AppRooms, Rooms, RoomsPerApp, RoomsPerAppOwner, RoomsPerOwner};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::env::predecessor_account_id;
+use near_sdk::json_types::U128;
 use near_sdk::serde::Serialize;
-use near_sdk::store::LookupMap;
-use near_sdk::store::Vector;
+use near_sdk::store::{LookupMap, UnorderedSet};
 use near_sdk::BorshStorageKey;
 use near_sdk::{near_bindgen, AccountId, CryptoHash};
 
 type RoomId = u64;
 type AppName = String;
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(Clone, BorshDeserialize, BorshSerialize)]
 pub struct Room {
     room_id: RoomId,
     name: String,
     owner_id: AccountId,
-    players: Vector<AccountId>,
-    banned_players: Vector<AccountId>,
-    player_limit: u32,
+    players: Vec<AccountId>,
+    banned_players: Vec<AccountId>,
+    player_limit: usize,
     is_hidden: bool,
     is_closed: bool,
     extra: Option<String>,
@@ -31,7 +31,7 @@ pub struct RoomConfig {
     app_name: String,
     name: String,
     is_hidden: bool,
-    player_limit: u32,
+    player_limit: usize,
     extra: Option<String>,
 }
 
@@ -39,15 +39,16 @@ pub struct RoomConfig {
 pub enum KeyStore {
     Rooms,
     RoomsPerApp,
+    AppRooms { hash: CryptoHash },
+    RoomsPerAppOwner,
     RoomsPerOwner { hash: CryptoHash },
-    Players { hash: CryptoHash },
-    BannedPlayers { hash: CryptoHash },
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     rooms: LookupMap<RoomId, Room>,
+    rooms_per_app: UnorderedMap<AppName, UnorderedSet<RoomId>>,
     rooms_per_app_owner: UnorderedMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
     next_room_id: u64,
 }
@@ -56,7 +57,8 @@ impl Default for Contract {
     fn default() -> Self {
         Self {
             rooms: LookupMap::new(Rooms),
-            rooms_per_app_owner: UnorderedMap::new(RoomsPerApp),
+            rooms_per_app: UnorderedMap::new(RoomsPerApp),
+            rooms_per_app_owner: UnorderedMap::new(RoomsPerAppOwner),
             next_room_id: 0,
         }
     }
@@ -64,6 +66,26 @@ impl Default for Contract {
 
 #[near_bindgen]
 impl Contract {
+    pub fn get_app_rooms(
+        &self,
+        app_name: AppName,
+        from_index: Option<U128>,
+        limit: Option<usize>,
+    ) -> Vec<Room> {
+        let app_rooms = self
+            .rooms_per_app
+            .get(&app_name)
+            .expect("App rooms not found");
+        let start = u128::from(from_index.unwrap_or(U128(0)));
+
+        app_rooms
+            .iter()
+            .skip(start as usize)
+            .take(limit.unwrap_or(0))
+            .map(|x| self.rooms.get(x).expect("Room not found").clone())
+            .collect()
+    }
+
     pub fn create_room(&mut self, room_config: RoomConfig) -> RoomId {
         let account_id = predecessor_account_id();
 
@@ -80,8 +102,8 @@ impl Contract {
             room_id,
             name: room_config.name,
             owner_id: account_id.clone(),
-            players: Vector::new(Players { hash: hash.clone() }),
-            banned_players: Vector::new(BannedPlayers { hash: hash.clone() }),
+            players: Vec::new(),
+            banned_players: Vec::new(),
             player_limit: room_config.player_limit,
             is_hidden: room_config.is_hidden,
             is_closed: false,
@@ -105,6 +127,15 @@ impl Contract {
 
         self.rooms_per_app_owner
             .insert(&room_config.app_name, &rooms_per_owner);
+
+        let mut rooms_per_app = self
+            .rooms_per_app
+            .get(&room_config.app_name)
+            .unwrap_or_else(|| UnorderedSet::new(AppRooms { hash }));
+
+        rooms_per_app.insert(room_id);
+        self.rooms_per_app
+            .insert(&room_config.app_name, &rooms_per_app);
 
         self.next_room_id += 1;
 
@@ -194,6 +225,17 @@ impl Contract {
 
             room_idx += 1;
         }
+
+        let mut rooms_per_app = self
+            .rooms_per_app
+            .get(&app_name)
+            .expect("App rooms not found");
+
+        if !rooms_per_app.remove(&room_id) {
+            panic!("App room not found")
+        }
+
+        self.rooms_per_app.insert(&app_name, &rooms_per_app);
     }
 
     pub fn kick_and_ban(&mut self, player_to_ban_id: AccountId, room_id: RoomId) {
@@ -208,15 +250,7 @@ impl Contract {
             panic!("Only the owner can kick the player")
         }
 
-        let mut player_to_ban_index = 0;
-        for player_id in room.players.iter() {
-            if player_id.eq(&player_to_ban_id.clone()) {
-                room.banned_players.push(player_to_ban_id.clone());
-                room.players.swap_remove(player_to_ban_index);
-                return;
-            }
-
-            player_to_ban_index += 1;
-        }
+        room.players.retain(|x| x.ne(&player_to_ban_id));
+        room.banned_players.push(player_to_ban_id.clone());
     }
 }
