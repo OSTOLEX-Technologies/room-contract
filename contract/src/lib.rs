@@ -48,7 +48,7 @@ pub enum KeyStore {
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     rooms: LookupMap<RoomId, Room>,
-    rooms_per_app: UnorderedMap<AppName, UnorderedSet<RoomId>>,
+    available_rooms_per_app: UnorderedMap<AppName, UnorderedSet<RoomId>>,
     rooms_per_app_owner: UnorderedMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
     next_room_id: u64,
 }
@@ -57,7 +57,7 @@ impl Default for Contract {
     fn default() -> Self {
         Self {
             rooms: LookupMap::new(Rooms),
-            rooms_per_app: UnorderedMap::new(RoomsPerApp),
+            available_rooms_per_app: UnorderedMap::new(RoomsPerApp),
             rooms_per_app_owner: UnorderedMap::new(RoomsPerAppOwner),
             next_room_id: 0,
         }
@@ -73,7 +73,7 @@ impl Contract {
         limit: Option<usize>,
     ) -> Vec<Room> {
         let app_rooms = self
-            .rooms_per_app
+            .available_rooms_per_app
             .get(&app_name)
             .expect("App rooms not found");
         let start = u128::from(from_index.unwrap_or(U128(0)));
@@ -88,7 +88,7 @@ impl Contract {
 
     pub fn get_random_room(&self, app_name: AppName) -> Room {
         let app_rooms = self
-            .rooms_per_app
+            .available_rooms_per_app
             .get(&app_name)
             .expect("App rooms not found");
 
@@ -125,7 +125,7 @@ impl Contract {
             room_id,
             name: room_config.name,
             owner_id: account_id.clone(),
-            players: Vec::new(),
+            players: vec![account_id.clone()],
             banned_players: Vec::new(),
             player_limit: room_config.player_limit,
             is_hidden: room_config.is_hidden,
@@ -152,12 +152,12 @@ impl Contract {
             .insert(&room_config.app_name, &rooms_per_owner);
 
         let mut rooms_per_app = self
-            .rooms_per_app
+            .available_rooms_per_app
             .get(&room_config.app_name)
             .unwrap_or_else(|| UnorderedSet::new(AppRooms { hash }));
 
         rooms_per_app.insert(room_id);
-        self.rooms_per_app
+        self.available_rooms_per_app
             .insert(&room_config.app_name, &rooms_per_app);
 
         self.next_room_id += 1;
@@ -203,7 +203,28 @@ impl Contract {
         }
     }
 
-    pub fn close(&mut self, room_id: RoomId) {
+    pub fn open(&mut self, room_id: RoomId, app_name: AppName) {
+        let player_id = predecessor_account_id();
+        let mut room = self.rooms.get_mut(&room_id).expect("Room id not found");
+
+        if room.owner_id.ne(&player_id) {
+            panic!("Only the owner can open the room")
+        }
+
+        room.is_closed = false;
+
+        let mut available_rooms = self
+            .available_rooms_per_app
+            .get(&app_name)
+            .expect("Available rooms not found in the app");
+
+        available_rooms.insert(room_id);
+
+        self.available_rooms_per_app
+            .insert(&app_name, &available_rooms);
+    }
+
+    pub fn close(&mut self, room_id: RoomId, app_name: AppName) {
         let mut room = self.rooms.get_mut(&room_id).expect("Room id not found");
         if room.is_closed {
             panic!("The room is already closed")
@@ -216,6 +237,22 @@ impl Contract {
         }
 
         room.is_closed = true;
+
+        self.remove_room_from_available(&room_id, &app_name);
+    }
+
+    fn remove_room_from_available(&mut self, room_id: &RoomId, app_name: &AppName) {
+        let mut available_rooms = self
+            .available_rooms_per_app
+            .get(&app_name)
+            .expect("Available rooms not found in the app");
+
+        if !available_rooms.remove(&room_id) {
+            panic!("Room not found in the app");
+        }
+
+        self.available_rooms_per_app
+            .insert(&app_name, &available_rooms);
     }
 
     pub fn remove(&mut self, room_id: RoomId, app_name: AppName) {
@@ -249,16 +286,7 @@ impl Contract {
             room_idx += 1;
         }
 
-        let mut rooms_per_app = self
-            .rooms_per_app
-            .get(&app_name)
-            .expect("App rooms not found");
-
-        if !rooms_per_app.remove(&room_id) {
-            panic!("App room not found")
-        }
-
-        self.rooms_per_app.insert(&app_name, &rooms_per_app);
+        self.remove_room_from_available(&room_id, &app_name);
     }
 
     pub fn kick_and_ban(&mut self, player_to_ban_id: AccountId, room_id: RoomId) {
