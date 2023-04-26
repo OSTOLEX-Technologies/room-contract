@@ -1,11 +1,17 @@
-use crate::KeyStore::{AppRooms, Rooms, RoomsPerApp, RoomsPerAppOwner, RoomsPerOwner};
+mod account;
+mod storage_tracker;
+
+use crate::account::Account;
+use crate::KeyStore::{
+    Accounts, AppRooms, Rooms, RoomsPerApp, RoomsPerAppOwner, RoomsPerOwner, StorageDeposit,
+};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
-use near_sdk::env::{predecessor_account_id, random_seed};
+use near_sdk::env::{attached_deposit, predecessor_account_id, random_seed};
 use near_sdk::json_types::U128;
 use near_sdk::serde::Serialize;
 use near_sdk::store::{LookupMap, UnorderedSet};
-use near_sdk::BorshStorageKey;
+use near_sdk::{Balance, BorshStorageKey, Promise};
 use near_sdk::{near_bindgen, AccountId, CryptoHash};
 
 type RoomId = u64;
@@ -39,17 +45,21 @@ pub struct RoomConfig {
 pub enum KeyStore {
     Rooms,
     RoomsPerApp,
+    Accounts,
     AppRooms { hash: CryptoHash },
     RoomsPerAppOwner,
     RoomsPerOwner { hash: CryptoHash },
+    StorageDeposit,
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     rooms: LookupMap<RoomId, Room>,
+    accounts: LookupMap<AccountId, Account>,
     available_rooms_per_app: UnorderedMap<AppName, UnorderedSet<RoomId>>,
     rooms_per_app_owner: UnorderedMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
+    storage_deposits: LookupMap<AccountId, Balance>,
     next_room_id: u64,
 }
 
@@ -57,8 +67,10 @@ impl Default for Contract {
     fn default() -> Self {
         Self {
             rooms: LookupMap::new(Rooms),
+            accounts: LookupMap::new(Accounts),
             available_rooms_per_app: UnorderedMap::new(RoomsPerApp),
             rooms_per_app_owner: UnorderedMap::new(RoomsPerAppOwner),
+            storage_deposits: LookupMap::new(StorageDeposit),
             next_room_id: 0,
         }
     }
@@ -109,6 +121,7 @@ impl Contract {
         random_in_range.floor() as usize
     }
 
+    #[payable]
     pub fn create_room(&mut self, room_config: RoomConfig) -> RoomId {
         let account_id = predecessor_account_id();
 
@@ -132,6 +145,9 @@ impl Contract {
             is_closed: false,
             extra: room_config.extra,
         };
+        let attached_balanced = attached_deposit();
+        let mut account = self.internal_unwrap_account_or_create(&account_id, attached_balanced);
+        account.start_storage_tracker();
 
         self.rooms.insert(new_room.room_id, new_room);
 
@@ -161,6 +177,9 @@ impl Contract {
             .insert(&room_config.app_name, &rooms_per_app);
 
         self.next_room_id += 1;
+
+        account.stop_storage_tracker();
+        self.internal_set_account(&account_id, account);
 
         room_id
     }
