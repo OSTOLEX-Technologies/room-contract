@@ -9,15 +9,17 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::env::{attached_deposit, predecessor_account_id, random_seed};
 use near_sdk::json_types::U128;
-use near_sdk::serde::Serialize;
+use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::store::{LookupMap, UnorderedSet};
-use near_sdk::{Balance, BorshStorageKey, Promise};
 use near_sdk::{near_bindgen, AccountId, CryptoHash};
+use near_sdk::{Balance, BorshStorageKey, Promise};
 
 type RoomId = u64;
 type AppName = String;
 
-#[derive(Clone, BorshDeserialize, BorshSerialize)]
+#[near_bindgen]
+#[derive(Clone, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Room {
     room_id: RoomId,
     name: String,
@@ -31,7 +33,7 @@ pub struct Room {
 }
 
 #[near_bindgen]
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct RoomConfig {
     app_name: String,
