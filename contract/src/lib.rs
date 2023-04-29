@@ -4,7 +4,7 @@ mod storage_tracker;
 
 use crate::account::Account;
 use crate::KeyStore::{
-    Accounts, AppRooms, Rooms, RoomsPerApp, RoomsPerAppOwner, RoomsPerOwner, StorageDeposit,
+    Accounts, AppRooms, Rooms, RoomsPerAccount, RoomsPerApp, RoomsPerAppAccount, StorageDeposit,
 };
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
@@ -50,8 +50,8 @@ pub enum KeyStore {
     RoomsPerApp,
     Accounts,
     AppRooms { hash: CryptoHash },
-    RoomsPerAppOwner,
-    RoomsPerOwner { hash: CryptoHash },
+    RoomsPerAppAccount,
+    RoomsPerAccount { hash: CryptoHash },
     StorageDeposit,
 }
 
@@ -61,7 +61,7 @@ pub struct Contract {
     rooms: LookupMap<RoomId, Room>,
     accounts: LookupMap<AccountId, Account>,
     available_rooms_per_app: UnorderedMap<AppName, UnorderedSet<RoomId>>,
-    rooms_per_app_owner: UnorderedMap<AppName, LookupMap<AccountId, Vec<RoomId>>>,
+    rooms_per_app_account: UnorderedMap<AppName, LookupMap<AccountId, Option<RoomId>>>,
     storage_deposits: LookupMap<AccountId, Balance>,
     next_room_id: u64,
 }
@@ -72,7 +72,7 @@ impl Default for Contract {
             rooms: LookupMap::new(Rooms),
             accounts: LookupMap::new(Accounts),
             available_rooms_per_app: UnorderedMap::new(RoomsPerApp),
-            rooms_per_app_owner: UnorderedMap::new(RoomsPerAppOwner),
+            rooms_per_app_account: UnorderedMap::new(RoomsPerAppAccount),
             storage_deposits: LookupMap::new(StorageDeposit),
             next_room_id: 0,
         }
@@ -81,18 +81,38 @@ impl Default for Contract {
 
 #[near_bindgen]
 impl Contract {
-    pub fn get_random_in_range(&self, min: usize, max: usize, index: usize) -> usize {
-        let random = *random_seed().get(index).unwrap();
-        let random_in_range = (random as f64 / 256.0) * (max - min) as f64 + min as f64;
-        random_in_range.floor() as usize
-    }
-
     #[payable]
     pub fn create_room(&mut self, room_config: RoomConfig) -> RoomId {
         let account_id = predecessor_account_id();
-
         let room_id = self.next_room_id;
-        let room_id_hash = room_id.to_le_bytes();
+
+        let new_room = Room {
+            room_id,
+            name: room_config.name.clone(),
+            owner_id: account_id.clone(),
+            players: vec![account_id.clone()],
+            banned_players: Vec::new(),
+            player_limit: room_config.player_limit.clone(),
+            is_hidden: room_config.is_hidden.clone(),
+            is_closed: false,
+            extra: room_config.extra.clone(),
+        };
+
+        let attached_balanced = attached_deposit();
+        let mut account = self.internal_unwrap_account_or_create(&account_id, attached_balanced);
+        account.start_storage_tracker();
+
+        self.save_new_room(new_room, &room_config, &account_id);
+        self.next_room_id += 1;
+
+        account.stop_storage_tracker();
+        self.internal_set_account(&account_id, account);
+
+        room_id
+    }
+
+    fn save_new_room(&mut self, new_room: Room, room_config: &RoomConfig, account_id: &AccountId) {
+        let room_id_hash = new_room.room_id.to_le_bytes();
 
         let hash = near_sdk::env::sha256_array(
             [&account_id.as_bytes()[..], &room_id_hash[..]]
@@ -100,54 +120,26 @@ impl Contract {
                 .as_slice(),
         );
 
-        let new_room = Room {
-            room_id,
-            name: room_config.name,
-            owner_id: account_id.clone(),
-            players: vec![account_id.clone()],
-            banned_players: Vec::new(),
-            player_limit: room_config.player_limit,
-            is_hidden: room_config.is_hidden,
-            is_closed: false,
-            extra: room_config.extra,
-        };
-        let attached_balanced = attached_deposit();
-        let mut account = self.internal_unwrap_account_or_create(&account_id, attached_balanced);
-        account.start_storage_tracker();
-
-        self.rooms.insert(new_room.room_id, new_room);
-
-        let mut rooms_per_owner = self
-            .rooms_per_app_owner
+        let mut rooms_per_account = self
+            .rooms_per_app_account
             .get(&room_config.app_name)
-            .unwrap_or_else(|| LookupMap::new(RoomsPerOwner { hash }));
+            .unwrap_or_else(|| LookupMap::new(RoomsPerAccount { hash }));
 
-        let mut rooms = match rooms_per_owner.get(&account_id) {
-            None => Vec::new(),
-            Some(rooms) => rooms.clone(),
-        };
+        rooms_per_account.insert(account_id.clone(), Some(new_room.room_id.clone()));
 
-        rooms.push(room_id);
-        rooms_per_owner.insert(account_id.clone(), rooms.clone());
-
-        self.rooms_per_app_owner
-            .insert(&room_config.app_name, &rooms_per_owner);
+        self.rooms_per_app_account
+            .insert(&room_config.app_name, &rooms_per_account);
 
         let mut rooms_per_app = self
             .available_rooms_per_app
             .get(&room_config.app_name)
             .unwrap_or_else(|| UnorderedSet::new(AppRooms { hash }));
 
-        rooms_per_app.insert(room_id);
+        rooms_per_app.insert(new_room.room_id.clone());
         self.available_rooms_per_app
             .insert(&room_config.app_name, &rooms_per_app);
 
-        self.next_room_id += 1;
-
-        account.stop_storage_tracker();
-        self.internal_set_account(&account_id, account);
-
-        room_id
+        self.rooms.insert(new_room.room_id, new_room);
     }
 
     pub fn join(&mut self, room_id: RoomId) {
@@ -159,7 +151,6 @@ impl Contract {
         if room.player_limit >= room.players.len() {
             panic!("Player limit exceeded")
         }
-
         let player_id = predecessor_account_id();
         for banned_player_id in room.banned_players.iter() {
             if banned_player_id.eq(&player_id) {
@@ -241,36 +232,22 @@ impl Contract {
     }
 
     pub fn remove(&mut self, room_id: RoomId, app_name: AppName) {
-        let room = self.rooms.get_mut(&room_id).expect("Room id not found");
+        let room = self.rooms.get(&room_id).expect("Room id not found");
         let player_id = predecessor_account_id();
 
         if room.owner_id.ne(&player_id) {
             panic!("Only the owner can close the room")
         }
 
-        let mut rooms_per_owner = self
-            .rooms_per_app_owner
+        let mut room_per_account = self
+            .rooms_per_app_account
             .get(&app_name)
             .expect("App name not found");
 
-        let mut player_rooms = rooms_per_owner
-            .get(&player_id)
-            .expect("Player rooms not found")
-            .clone();
-
-        let mut room_idx = 0;
-        for room_id_to_remove in player_rooms.iter() {
-            if room_id_to_remove.eq(&room_id) {
-                player_rooms.swap_remove(room_idx);
-                rooms_per_owner.insert(player_id, player_rooms);
-                self.rooms_per_app_owner.insert(&app_name, &rooms_per_owner);
-                self.rooms.remove(&room_id);
-                return;
-            }
-
-            room_idx += 1;
+        for player_id in &room.players {
+            room_per_account.insert(player_id.clone(), None);
         }
-
+        self.rooms.remove(&room_id);
         self.remove_room_from_available(&room_id, &app_name);
     }
 

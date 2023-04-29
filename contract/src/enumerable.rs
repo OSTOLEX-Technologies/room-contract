@@ -1,31 +1,20 @@
 use crate::*;
+use std::fs::read;
 
 #[near_bindgen]
 impl Contract {
-    pub fn get_owner_app_rooms(
-        &self,
-        app_name: &AppName,
-        owner_id: AccountId,
-        from_index: Option<U128>,
-        limit: Option<usize>,
-    ) -> Vec<Room> {
-        let rooms_per_owner = self
-            .rooms_per_app_owner
+    pub fn get_app_account_room(&self, app_name: AppName, account_id: AccountId) -> Option<Room> {
+        let room_per_account = self
+            .rooms_per_app_account
             .get(&app_name)
             .expect("App not found");
 
-        let room_ids = rooms_per_owner
-            .get(&owner_id)
-            .expect("Owner rooms not found");
-
-        let start = u128::from(from_index.unwrap_or(U128(0)));
-
-        room_ids
-            .iter()
-            .skip(start as usize)
-            .take(limit.unwrap_or(0))
-            .map(|room_id| self.rooms.get(room_id).expect("Room not found").clone())
-            .collect()
+        match room_per_account.get(&account_id) {
+            None => None,
+            Some(room_id_opt) => {
+                room_id_opt.map(|room_id| self.rooms.get(&room_id).expect("").clone())
+            }
+        }
     }
 
     pub fn get_app_rooms(
@@ -63,5 +52,11 @@ impl Contract {
             .get(rnd_room_id)
             .expect("Random room not found")
             .clone()
+    }
+
+    pub fn get_random_in_range(&self, min: usize, max: usize, index: usize) -> usize {
+        let random = *random_seed().get(index).unwrap();
+        let random_in_range = (random as f64 / 256.0) * (max - min) as f64 + min as f64;
+        random_in_range.floor() as usize
     }
 }
