@@ -142,7 +142,7 @@ impl Contract {
         self.rooms.insert(new_room.room_id, new_room);
     }
 
-    pub fn join(&mut self, room_id: RoomId) {
+    pub fn join(&mut self, room_id: RoomId, app_name: AppName) {
         let room = self.rooms.get_mut(&room_id).expect("Room id not found");
         if room.is_closed {
             panic!("The room is already closed")
@@ -158,19 +158,35 @@ impl Contract {
             }
         }
 
+        let mut room_per_account = self
+            .rooms_per_app_account
+            .get(&app_name)
+            .expect("App not found");
+
+        room_per_account.insert(player_id.clone(), Some(room_id));
+        self.rooms_per_app_account
+            .insert(&app_name, &room_per_account);
         room.players.push(player_id);
     }
 
-    pub fn leave(&mut self, room_id: RoomId) {
+    pub fn leave(&mut self, room_id: RoomId, app_name: AppName) {
         let room = self.rooms.get_mut(&room_id).expect("Room id not found");
         if room.is_closed {
             panic!("The room is already closed")
         }
 
+        let mut room_per_account = self
+            .rooms_per_app_account
+            .get(&app_name)
+            .expect("App not found");
+
         let player_leave_id = predecessor_account_id();
         let mut player_idx = 0;
         for player_id in room.players.iter() {
             if player_id.eq(&player_leave_id) {
+                room_per_account.insert(player_id.clone(), None);
+                self.rooms_per_app_account
+                    .insert(&app_name, &room_per_account);
                 room.players.swap_remove(player_idx);
                 return;
             }
@@ -247,6 +263,7 @@ impl Contract {
         for player_id in &room.players {
             room_per_account.insert(player_id.clone(), None);
         }
+        self.rooms_per_app_account.insert(&app_name, &room_per_account);
         self.rooms.remove(&room_id);
         self.remove_room_from_available(&room_id, &app_name);
     }
