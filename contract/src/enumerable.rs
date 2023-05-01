@@ -1,5 +1,4 @@
 use crate::*;
-use std::fs::read;
 
 #[near_bindgen]
 impl Contract {

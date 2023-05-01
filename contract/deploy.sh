@@ -10,4 +10,4 @@ fi
 echo ">> Deploying contract"
 
 # https://docs.near.org/tools/near-cli#near-dev-deploy
-near deploy --accountId room.ostolex.testnet --wasmFile ./target/wasm32-unknown-unknown/release/room.wasm
+near deploy --accountId room1.ostolex.testnet --wasmFile ./target/wasm32-unknown-unknown/release/room.wasm

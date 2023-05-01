@@ -252,7 +252,7 @@ impl Contract {
         let player_id = predecessor_account_id();
 
         if room.owner_id.ne(&player_id) {
-            panic!("Only the owner can close the room")
+            panic!("Only the owner can remove the room")
         }
 
         let mut room_per_account = self
