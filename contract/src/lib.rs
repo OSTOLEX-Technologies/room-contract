@@ -14,6 +14,7 @@ use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::store::{LookupMap, UnorderedSet};
 use near_sdk::{near_bindgen, AccountId, CryptoHash};
 use near_sdk::{Balance, BorshStorageKey, Promise};
+use near_sys::panic;
 
 type RoomId = u64;
 type AppName = String;
@@ -152,6 +153,10 @@ impl Contract {
             panic!("Player limit exceeded")
         }
         let player_id = predecessor_account_id();
+        if room.players.contains(&player_id) {
+            panic!("The player is already joined")
+        }
+
         for banned_player_id in room.banned_players.iter() {
             if banned_player_id.eq(&player_id) {
                 panic!("Player is banned")
