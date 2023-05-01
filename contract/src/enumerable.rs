@@ -36,7 +36,7 @@ impl Contract {
             .collect()
     }
 
-    pub fn get_random_room(&self, app_name: AppName) -> Room {
+    pub fn get_random_room(&self, app_name: AppName) -> Option<Room> {
         let app_rooms = self
             .available_rooms_per_app
             .get(&app_name)
@@ -44,13 +44,19 @@ impl Contract {
 
         let room_ids: Vec<&RoomId> = app_rooms.iter().collect();
         let number_of_rooms = room_ids.len() as usize;
+        if number_of_rooms == 0 {
+            return None;
+        }
+
         let rnd_idx = self.get_random_in_range(0, number_of_rooms, 0);
         let rnd_room_id = room_ids.get(rnd_idx).expect("Random room id not found");
 
-        self.rooms
+        let random_room = self.rooms
             .get(rnd_room_id)
             .expect("Random room not found")
-            .clone()
+            .clone();
+
+        Some(random_room)
     }
 
     pub fn get_random_in_range(&self, min: usize, max: usize, index: usize) -> usize {
