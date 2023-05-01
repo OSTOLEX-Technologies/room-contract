@@ -148,7 +148,7 @@ impl Contract {
             panic!("The room is already closed")
         }
 
-        if room.player_limit >= room.players.len() {
+        if room.player_limit <= room.players.len() {
             panic!("Player limit exceeded")
         }
         let player_id = predecessor_account_id();
