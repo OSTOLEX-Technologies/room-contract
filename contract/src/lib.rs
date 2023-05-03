@@ -143,23 +143,21 @@ impl Contract {
         self.rooms.insert(new_room.room_id, new_room);
     }
 
-    pub fn random_join(&mut self, app_name: AppName) -> Option<RoomId> {
+    pub fn random_join(&mut self, app_name: AppName) {
         let account_id = predecessor_account_id();
         let room_per_account = self.rooms_per_app_account.get(&app_name).expect("App not found");
         let room = room_per_account.get(&account_id);
         if !room.is_none() {
-            return None;
+            panic!("Account is already in the room")
         }
 
         let random_room_wrapped = self.get_random_room(app_name.clone());
         if random_room_wrapped.is_none() {
-            return None;
+            panic!("There are currently no available rooms")
         }
 
         let random_room = random_room_wrapped.unwrap();
         self.join(random_room.room_id, app_name);
-
-        Some(random_room.room_id)
     }
 
     pub fn join(&mut self, room_id: RoomId, app_name: AppName) {
