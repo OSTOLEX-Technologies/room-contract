@@ -114,7 +114,6 @@ impl Contract {
 
     fn save_new_room(&mut self, new_room: Room, room_config: &RoomConfig, account_id: &AccountId) {
         let room_id_hash = new_room.room_id.to_le_bytes();
-
         let hash = near_sdk::env::sha256_array(
             [&account_id.as_bytes()[..], &room_id_hash[..]]
                 .concat()
@@ -125,6 +124,10 @@ impl Contract {
             .rooms_per_app_account
             .get(&room_config.app_name)
             .unwrap_or_else(|| LookupMap::new(RoomsPerAccount { hash }));
+
+        if rooms_per_account.get(&account_id.clone()).is_some() {
+            panic!("You are already in the room")
+        }
 
         rooms_per_account.insert(account_id.clone(), Some(new_room.room_id.clone()));
 
@@ -147,7 +150,7 @@ impl Contract {
         let account_id = predecessor_account_id();
         let room_per_account = self.rooms_per_app_account.get(&app_name).expect("App not found");
         let room = room_per_account.get(&account_id);
-        if !room.is_none() {
+        if !room.is_none() && !room.unwrap().is_none() {
             panic!("Account is already in the room")
         }
 

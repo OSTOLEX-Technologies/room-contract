@@ -3,10 +3,13 @@ use crate::*;
 #[near_bindgen]
 impl Contract {
     pub fn get_app_account_room(&self, app_name: AppName, account_id: AccountId) -> Option<Room> {
-        let room_per_account = self
+        let wrapped_room_per_account = self
             .rooms_per_app_account
-            .get(&app_name)
-            .expect("App not found");
+            .get(&app_name);
+        if wrapped_room_per_account.is_none() {
+            return None;
+        }
+        let room_per_account = wrapped_room_per_account.unwrap();
 
         match room_per_account.get(&account_id) {
             None => None,
@@ -34,6 +37,21 @@ impl Contract {
             .take(limit.unwrap_or(0))
             .map(|x| self.rooms.get(x).expect("Room not found").clone())
             .collect()
+    }
+
+    pub fn get_number_of_available_rooms(&self, app_name: AppName) -> usize {
+        let wrapped_app_rooms = self
+            .available_rooms_per_app
+            .get(&app_name);
+
+        if wrapped_app_rooms.is_none() {
+            return 0;
+        }
+
+        let app_rooms = wrapped_app_rooms.unwrap();
+
+        let room_ids: Vec<&RoomId> = app_rooms.iter().collect();
+        room_ids.len()
     }
 
     pub fn get_random_room(&self, app_name: AppName) -> Room {
